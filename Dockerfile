@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:labs
-FROM alpine:3.24.0
+FROM alpine:3.24.1
 COPY update.sh /usr/local/bin/update.sh
 RUN apk upgrade --no-cache -a && \
     apk add --no-cache ca-certificates tzdata tini curl jq
