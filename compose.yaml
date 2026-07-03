@@ -1,9 +1,14 @@
 services:
   aida-price-checker:
     container_name: aida-price-checker
-    image: zoeyvid/aida-price-checker
-    restart: always
+    restart: unless-stopped
+    image: zoeyvid/aida-price-checker:latest # or ghcr.io/zoeyvid/aida-price-checker:latest
+    pull_policy: always
     network_mode: bridge
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       - "TZ=Europe/Berlin"                                   # Zeitzone
       - "CI=7d"                                              # interval to sent prices
