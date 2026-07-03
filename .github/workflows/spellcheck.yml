@@ -15,5 +15,4 @@ jobs:
         with:
           check_filenames: true
           check_hidden: true
-          skip: .git,.gitignore
           ignore_words_list: tage,ist
