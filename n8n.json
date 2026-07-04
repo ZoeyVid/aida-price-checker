@@ -1,0 +1,236 @@
+{
+  "name": "AIDA Preisalarm",
+  "active": false,
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n2",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"REPLACE_JOURNEY_ID\": {\n    \"adults\": 2,\n    \"juveniles\": 1,\n    \"children\": 0,\n    \"babies\": 0,\n    \"telegramChatIds\": [\"REPLACE_CHAT_ID\"]\n  }\n}\n",
+        "options": {}
+      }
+    },
+    {
+      "id": "n3",
+      "name": "Prepare Cruises",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return Object.entries($input.first().json).map(([journeyId, c]) => ({\n  json: {\n    journeyId, ...c,\n    headers: {\n      priority: \"u=1, i\",\n      \"sec-ch-ua\": '\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\", \"Brave\";v=\"150\"',\n      \"user-agent\": \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36\"\n    },\n    subBody: {\n      cruise: {\n        journeyIdentifier: [journeyId]\n      },\n      productTypes: [\"Cruise\"],\n      period: {\n        start: {\n          preOffset: 0,\n          date: new Date().toISOString().slice(0, 10),\n          postOffset: 999\n        }\n      },\n      passengers: Object.entries({\n        adults: 40,\n        juveniles: 20,\n        children: 10,\n        babies: 1\n      }).flatMap(([k, age]) => Array(c[k]).fill(age)).map((age, idx) => ({ id: idx + 1, age }))\n    }\n  }\n}));\n"
+      }
+    },
+    {
+      "id": "Cruise Detail",
+      "name": "Cruise Detail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        660,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($('Prepare Cruises').first().json.headers) }}",
+        "options": {},
+        "url": "=https://aida.de/content/aida-search-and-booking/requests/detail.cruise.json/adults={{ $json.adults }}/juveniles={{ $json.juveniles }}/children={{ $json.children }}/babies={{ $json.babies }}/JourneyIdentifier={{ $json.journeyId }}.json"
+      }
+    },
+    {
+      "id": "Catalog",
+      "name": "Catalog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        880,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($('Prepare Cruises').first().json.headers) }}",
+        "options": {},
+        "url": "=https://aida.de/graphql/execute.json/global/subcategories-by-ship-and-category%3BshipName%3D{{ $('Cruise Detail').item.json.ship }}%3Bvariation%3D{{ $('Cruise Detail').item.json.shipConfiguration }}"
+      }
+    },
+    {
+      "id": "SubCategory",
+      "name": "SubCategory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1100,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($('Prepare Cruises').first().json.headers) }}",
+        "options": {},
+        "method": "POST",
+        "url": "https://aida.de/content/aida-search-and-booking/requests/player.proxy.json",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/x-www-form-urlencoded",
+        "body": "={{ JSON.stringify($('Prepare Cruises').item.json.subBody) }}"
+      }
+    },
+    {
+      "id": "n7",
+      "name": "Build Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const store = $getWorkflowStaticData('global');\nstore.prices = store.prices || {};\nconst fmt = n => Number(n).toLocaleString('de-DE');\nconst out = [];\nconst cruises = $('Prepare Cruises').all();\nfor (let i = 0; i < cruises.length; i++) {\n  const cfg = cruises[i].json;\n  const detail = $('Cruise Detail').all()[i].json;\n  if (!detail || !detail.title || detail.isCruiseAvailable === false) continue;\n  const cur = detail.currency;\n  const jid = cfg.journeyId;\n  const delta = (prev, amt) => prev != null && prev !== amt ? `${fmt(prev)} → ${fmt(amt)} ${cur}` : `${fmt(amt)} ${cur}`;\n  const catName = Object.fromEntries((detail.cabinItemsVariant || []).map(c => [c.cabinCode, c.cabinName]));\n  const catOrder = Object.keys(catName);\n\n  const spec = {};\n  for (const it of $('Catalog').all()[i].json?.data?.kabinenkategorieSpezifikationList?.items || [])\n    spec[it.cabin_category_code] = { name: it.cabin_category_specification_name, cat: it.cabin_category.category_code };\n\n  const subResp = $('SubCategory').all()[i].json;\n  const variants = {};\n  for (const s of subResp?.services || []) for (const v of s.cruiseService?.cruiseVariants || []) variants[`${s.id}:${v.id}`] = v.cabin;\n  const sub = {};\n  for (const p of subResp?.products || []) {\n    const cabin = variants[`${p.serviceReferences[0].serviceId}:${p.serviceReferences[0].serviceVariantId}`];\n    if (!cabin) continue;\n    const g = spec[cabin.cabinCode]?.cat || cabin.cabinCode[0];\n    ((sub[g] ||= {})[cabin.tariffType] ||= { name: cabin.tariffName, rows: [] }).rows.push({ code: cabin.cabinCode, amount: p.priceInformation.amount });\n  }\n\n  const bl = {};\n  const fb = {};\n  for (const cab of detail.cabinItemsVariant || []) {\n    const g = cab.cabinCode;\n    for (const t of Object.values(cab).filter(v => v && typeof v === 'object' && Array.isArray(v.prices) && v.prices.length)) {\n      const noFlight = t.prices.filter(p => p.flightIncluded === false);\n      if (!noFlight.length) continue;\n      (bl[g] ||= {})[t.tariffType] = noFlight[0].bookingLink;\n      if (!sub[g]?.[t.tariffType]) (fb[g] ||= {})[t.tariffType] = { name: t.tariffName, amount: Math.min(...noFlight.map(p => p.amount)) };\n    }\n  }\n  const link = (g, t, label) => bl[g]?.[t] ? `[${label}](https://aida.de/buchen${bl[g][t]})` : label;\n\n  const tmin = (g, t) => sub[g]?.[t] ? Math.min(...sub[g][t].rows.map(r => r.amount)) : fb[g][t].amount;\n  let body = `*${detail.title}*\\n${(detail.itinerary || []).map(x => x.name).join(' – ')}\\n${detail.startDate} bis ${detail.endDate} (${detail.duration} Tage)\\n${cfg.adults}x Erwachsene, ${cfg.juveniles}x Jugendliche, ${cfg.children}x Kinder, ${cfg.babies}x Babys`;\n  const seen = new Set();\n  let changed = false;\n  for (const g of [...new Set([...Object.keys(sub), ...Object.keys(fb)])].sort((a, b) => catOrder.indexOf(a) - catOrder.indexOf(b))) {\n    body += `\\n\\n*${catName[g] || g}*`;\n    for (const t of [...new Set([...Object.keys(fb[g] || {}), ...Object.keys(sub[g] || {})])].sort((a, b) => tmin(g, a) - tmin(g, b))) {\n      const s = sub[g]?.[t];\n      if (s) {\n        body += `\\n  ${link(g, t, s.name)}`;\n        for (const r of s.rows.sort((a, b) => a.amount - b.amount)) {\n          const key = `${jid}|${t}|${r.code}`;\n          if (store.prices[key] !== r.amount) changed = true;\n          body += `\\n    ${spec[r.code]?.name || r.code} (${r.code}): ${delta(store.prices[key], r.amount)}`;\n          store.prices[key] = r.amount; seen.add(key);\n        }\n      } else {\n        const key = `${jid}|${t}|#${g}`;\n        if (store.prices[key] !== fb[g][t].amount) changed = true;\n        body += `\\n  ${link(g, t, fb[g][t].name)}: ${delta(store.prices[key], fb[g][t].amount)}`;\n        store.prices[key] = fb[g][t].amount; seen.add(key);\n      }\n    }\n  }\n  for (const k of Object.keys(store.prices)) if (k.startsWith(`${jid}|`) && !seen.has(k)) { changed = true; delete store.prices[k]; }\n  if (changed) for (const chatId of cfg.telegramChatIds) out.push({ json: { chatId, message: body } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "n8",
+      "name": "Send Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_notification": false,
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Prepare Cruises",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Cruises": {
+      "main": [
+        [
+          {
+            "node": "Cruise Detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cruise Detail": {
+      "main": [
+        [
+          {
+            "node": "Catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Catalog": {
+      "main": [
+        [
+          {
+            "node": "SubCategory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SubCategory": {
+      "main": [
+        [
+          {
+            "node": "Build Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Messages": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
