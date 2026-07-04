@@ -1,3 +1,3 @@
 # aida-price-checker
 
-This docker images mainly uses curl and jq to connect to the aida and telegram API
+This is a n8n workflow which fetches aida cruises prices and alerts on changes via Telegram.
