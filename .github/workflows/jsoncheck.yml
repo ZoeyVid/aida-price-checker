@@ -2,7 +2,7 @@ name: jsoncheck
 on:
   push:
     branches:
-      - latest
+      - develop
   pull_request:
   workflow_dispatch:
 jobs:
