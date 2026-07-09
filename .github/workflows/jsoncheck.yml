@@ -1,6 +1,8 @@
 name: jsoncheck
 on:
   push:
+    branches:
+      - latest
   pull_request:
   workflow_dispatch:
 jobs:
